@@ -2,6 +2,9 @@ from scipy import stats
 import numpy as np
 
 
+EPS = 1e-2
+
+
 class Distribution:
     def __init__(self, pdf: callable, cdf: callable, ppf: callable):
         self.pdf = pdf
@@ -63,9 +66,69 @@ def sample_from_distribution(dst: Distribution, n_samples: int):
 
 def run_simulation(h: callable, g: Distribution, pi: Distribution, n_samples: int):
     selection = sample_from_distribution(g, n_samples)
-    eps = 1e-2
-    estimated = h(selection)*(pi.pdf(selection)+eps)/(g.pdf(selection)+eps)
+    estimated = h(selection)*(pi.pdf(selection)+EPS)/(g.pdf(selection)+EPS)
 
     estimated_values = [estimated[:n].mean() for n in range(1, n_samples)]
 
     return np.array(estimated_values), estimated
+
+
+def sample_labels(alphas: np.ndarray, n_samples: int):
+    selection = stats.uniform.rvs(0, 1, n_samples).astype(np.float64)
+    labels = np.zeros_like(selection, np.int)
+    for i in range(1, len(alphas)):
+        labels[selection >= alphas[:i].sum()] = i
+    return labels
+
+
+class AdaptiveSampling:
+    def __init__(self, h: callable, dists: list, pi: Distribution):
+        self.d = len(dists)
+        self.alphas = np.ones(self.d)/self.d
+        self.dists = dists
+        self.h = h
+        self.pi = pi
+
+    def _compose_dists(self, x: np.ndarray):
+        res = np.zeros_like(x, np.float64)
+        for n, dist in enumerate(self.dists):
+            res += self.alphas[n] * dist.pdf(x)
+        return res
+
+    def fit(self, n_samples=10000, max_iter=1000, tolerance=1e-6):
+        alphas_log = []
+        approx_log = []
+        variance_log = []
+
+        for i in range(max_iter):
+            alphas_log.append(self.alphas)
+            labels = sample_labels(self.alphas, n_samples)
+            selection = np.zeros(n_samples, np.float64)
+            for label, count in zip(*np.unique(labels, return_counts=True)):
+                if count != 0:
+                    selection[labels == label] = sample_from_distribution(self.dists[label], count)
+
+            estimated = self.h(selection)*(self.pi.pdf(selection)+EPS)/(self._compose_dists(selection)+EPS)
+            approx = np.mean(estimated)
+            approx_log.append(approx)
+            variance_log.append(estimated.var())
+
+            denominator = np.sum((self.h(selection)*(self.pi.pdf(selection)+EPS)/(self._compose_dists(selection)+EPS))**2)
+
+            new_alphas = np.zeros_like(self.alphas, np.float64)
+
+            for label in np.unique(labels):
+                subsel = selection[labels == label]
+                nominator = np.sum((self.h(subsel)*(self.pi.pdf(subsel)+EPS)/(self._compose_dists(subsel)+EPS))**2)
+                new_alphas[label] = nominator/denominator
+
+            delta = np.abs(new_alphas - self.alphas).mean()
+            self.alphas = new_alphas
+
+            if delta <= tolerance:
+                print(f"Algorithm converged on iteration {i}")
+                break
+        else:
+            print(f"Algorithm did not converge")
+
+        return alphas_log, approx_log, variance_log
