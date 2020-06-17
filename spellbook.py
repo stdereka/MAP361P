@@ -21,6 +21,7 @@ class QuantileTransformer:
 
 uniform_0_1 = Distribution(stats.uniform.pdf, stats.uniform.cdf, stats.uniform.ppf)
 normal_standard = Distribution(stats.norm.pdf, stats.norm.cdf, stats.norm.ppf)
+laplace = Distribution(stats.laplace.pdf, stats.laplace.cdf, stats.laplace.ppf)
 
 
 def g_tilde_pdf(x: np.ndarray):
@@ -49,6 +50,8 @@ g_tilde = Distribution(g_tilde_pdf, g_tilde_cdf, g_tilde_ppf)
 
 
 g_polynomial = Distribution(lambda x: (5/2)*x**(3/2), lambda x: x**(5/2), lambda x: x**(2/5))
+g_hyperbolic = Distribution(lambda x: (1/np.log(2))/(x+1), lambda x: np.log(x+1), lambda x: np.exp(x) - 1)
+g_parabolic = Distribution(lambda x: (1/np.log(2))/(x+1), lambda x: np.log(x+1), lambda x: np.exp(x) - 1)
 
 
 def sample_from_distribution(dst: Distribution, n_samples: int):
@@ -103,7 +106,7 @@ class AdaptiveSampling:
     def estimate(self, n_samples=10000):
         selection, _ = self.sample(n_samples)
         estimated = self.h(selection) * self.pi.pdf(selection) / self._compose_dists(selection)
-        return estimated.mean()
+        return estimated
 
     def fit(self, n_samples=10000, max_iter=1000, tolerance=1e-6):
         alphas_log = []
