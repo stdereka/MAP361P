@@ -1,12 +1,20 @@
 from scipy import stats
 import numpy as np
 
+EPS = 1e-6
+
 
 class Distribution:
     def __init__(self, pdf: callable, cdf: callable, ppf: callable):
         self.pdf = pdf
         self.cdf = cdf
         self.ppf = ppf
+
+    def sample(self, n_samples: int):
+        selection = stats.uniform.rvs(0, 1, n_samples).astype(np.float64)
+        qt = QuantileTransformer(uniform_0_1, self)
+        res = qt(selection)
+        return res
 
 
 class QuantileTransformer:
@@ -51,34 +59,15 @@ g_tilde = Distribution(g_tilde_pdf, g_tilde_cdf, g_tilde_ppf)
 
 g_polynomial = Distribution(lambda x: (5/2)*x**(3/2), lambda x: x**(5/2), lambda x: x**(2/5))
 g_hyperbolic = Distribution(lambda x: (1/np.log(2))/(x+1), lambda x: np.log(x+1), lambda x: np.exp(x) - 1)
-g_parabolic = Distribution(lambda x: (1/np.log(2))/(x+1), lambda x: np.log(x+1), lambda x: np.exp(x) - 1)
 
 
-def sample_from_distribution(dst: Distribution, n_samples: int):
-    selection = stats.uniform.rvs(0, 1, n_samples).astype(np.float64)
-    if dst == uniform_0_1:
-        return selection
-    else:
-        qt = QuantileTransformer(uniform_0_1, dst)
-        res = qt(selection)
-        return res
-
-
-def run_simulation(h: callable, g: Distribution, pi: Distribution, n_samples: int):
-    selection = sample_from_distribution(g, n_samples)
-    estimated = h(selection)*pi.pdf(selection)/g.pdf(selection)
+def run_simple_simulation(h: callable, g: Distribution, pi: Distribution, n_samples: int):
+    selection = g.sample(n_samples)
+    estimated = h(selection)*(pi.pdf(selection)+EPS)/(g.pdf(selection)+EPS)
 
     estimated_values = [estimated[:n].mean() for n in range(1, n_samples)]
 
     return np.array(estimated_values), estimated
-
-
-def sample_labels(alphas: np.ndarray, n_samples: int):
-    selection = stats.uniform.rvs(0, 1, n_samples).astype(np.float64)
-    labels = np.zeros_like(selection, np.int)
-    for i in range(1, len(alphas)):
-        labels[selection >= alphas[:i].sum()] = i
-    return labels
 
 
 class AdaptiveSampling:
@@ -95,33 +84,48 @@ class AdaptiveSampling:
             res += self.alphas[n] * dist.pdf(x)
         return res
 
+    def _sample_labels(self, n_samples: int):
+        selection = stats.uniform.rvs(0, 1, n_samples).astype(np.float64)
+        labels = np.zeros_like(selection, np.int)
+        for i in range(1, len(self.alphas)):
+            labels[selection >= self.alphas[:i].sum()] = i
+        return labels
+
     def sample(self, n_samples=10000):
-        labels = sample_labels(self.alphas, n_samples)
+        labels = self._sample_labels(n_samples)
         selection = np.zeros(n_samples, np.float64)
         for label, count in zip(*np.unique(labels, return_counts=True)):
             if count != 0:
-                selection[labels == label] = sample_from_distribution(self.dists[label], count)
+                selection[labels == label] = self.dists[label].sample(count)
         return selection, labels
 
     def estimate(self, n_samples=10000):
         selection, _ = self.sample(n_samples)
-        estimated = self.h(selection) * self.pi.pdf(selection) / self._compose_dists(selection)
+        estimated = self.h(selection)*self.pi.pdf(selection)/self._compose_dists(selection)
         return estimated
 
-    def fit(self, n_samples=10000, max_iter=1000, tolerance=1e-6):
-        alphas_log = []
-        approx_log = []
-        variance_log = []
+    def fit(self, n_samples=10000, max_iter=1000, tolerance=1e-6, debug=False):
+        history = {
+            "alphas_log": [],
+            "approx_log": [],
+            "variance_log": [],
+            "global_estimation_log": []
+        }
 
         for i in range(max_iter):
-            alphas_log.append(self.alphas)
+            history["alphas_log"].append(self.alphas)
 
             selection, labels = self.sample(n_samples)
 
             estimated = self.h(selection)*self.pi.pdf(selection)/self._compose_dists(selection)
             approx = np.mean(estimated)
-            approx_log.append(approx)
-            variance_log.append(estimated.var())
+            history["approx_log"].append(approx)
+            history["variance_log"].append(estimated.var())
+
+            if debug:
+                m = 100
+                ests = np.array([self.estimate(m).mean()*m**0.5 for _ in range(10000)])
+                history["global_estimation_log"].append(ests)
 
             denominator = np.sum((self.h(selection)*self.pi.pdf(selection)/self._compose_dists(selection))**2)
 
@@ -129,8 +133,8 @@ class AdaptiveSampling:
 
             for label in np.unique(labels):
                 subsel = selection[labels == label]
-                nominator = np.sum((self.h(subsel)*self.pi.pdf(subsel)/self._compose_dists(subsel))**2)
-                new_alphas[label] = nominator/denominator
+                numerator = np.sum((self.h(subsel)*self.pi.pdf(subsel)/self._compose_dists(subsel))**2)
+                new_alphas[label] = numerator/denominator
 
             delta = np.abs(new_alphas - self.alphas).mean()
             self.alphas = new_alphas
@@ -139,6 +143,6 @@ class AdaptiveSampling:
                 print(f"Algorithm converged on iteration {i}")
                 break
         else:
-            print(f"Algorithm did not converge")
+            print(f"Maximal iteration ({max_iter}) is reached")
 
-        return alphas_log, approx_log, variance_log
+        return history
