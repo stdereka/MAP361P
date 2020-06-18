@@ -65,6 +65,7 @@ def run_simple_simulation(h: callable, g: Distribution, pi: Distribution, n_samp
     selection = g.sample(n_samples)
     estimated = h(selection)*(pi.pdf(selection)+EPS)/(g.pdf(selection)+EPS)
 
+    # TODO Can be done faster!
     estimated_values = [estimated[:n].mean() for n in range(1, n_samples)]
 
     return np.array(estimated_values), estimated
